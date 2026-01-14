@@ -11,7 +11,7 @@ st.title("🤖 AI ผู้ช่วยทำนายผลใบหยุด")
 # --- 2. ฟังก์ชันโหลดข้อมูลแบบเหมาเข่ง ---
 @st.cache_data
 def load_data():
-    folder_path = 'data'  # ชื่อโฟลเดอร์ที่เก็บ Excel
+    folder_path = '.'  # ชื่อโฟลเดอร์ที่เก็บ Excel
     all_dfs = []
     
     # ตรวจสอบว่ามีโฟลเดอร์ไหม
@@ -116,4 +116,5 @@ if df is not None and isinstance(df, pd.DataFrame):
 elif df == "NO_FILES":
     st.error("❌ ไม่พบไฟล์ Excel ในโฟลเดอร์ data เลยครับ")
 else:
+
     st.error("❌ หาโฟลเดอร์ 'data' ไม่เจอ! กรุณาตรวจสอบว่าสร้างโฟลเดอร์ data และใส่ไฟล์ Excel ไว้ใน GitHub แล้ว")
