@@ -27,18 +27,23 @@ def load_data():
             else:
                 df_temp = pd.read_excel(file_path)
             
+            # เคลียร์ชื่อหัวตาราง
             df_temp.columns = df_temp.columns.str.strip()
             
+            # จัดการชื่อคอลัมน์ให้เป็นมาตรฐาน
             rename_map = {
                 'Full Description': 'Full_Description',
                 'Problem': 'Full_Description',
                 'Defect': 'Full_Description',
                 'Decision Result': 'Decision result',
                 'Result': 'Decision result',
-                'Status': 'Decision result'
+                'Status': 'Decision result',
+                'Cable Type': 'Cables type',  # เผื่อบางไฟล์ชื่อไม่ตรง
+                'Wire Type': 'Cables type'
             }
             df_temp = df_temp.rename(columns=rename_map)
             
+            # เช็คว่ามีคอลัมน์สำคัญครบไหม
             if 'Full_Description' in df_temp.columns:
                 all_dfs.append(df_temp)
                 
@@ -48,17 +53,18 @@ def load_data():
     if all_dfs:
         df = pd.concat(all_dfs, ignore_index=True)
         
-        search_col = 'Full_Description'
-        cols_display = ['No of HoldTag', 'Customer', 'Cables type', 'Decision result', 'Date', 'Recheck']
+        # คอลัมน์ที่ต้องการแสดงผล
+        cols_display = ['No of HoldTag', 'Customer', 'Cables type', 'Decision result', 'Date', 'Recheck', 'Full_Description']
         
+        # จัดการค่าว่าง (NaN)
         for col in cols_display:
             if col in df.columns:
                 df[col] = df[col].astype(str).replace('nan', '-')
         
-        if search_col in df.columns:
-            df[search_col] = df[search_col].fillna("ไม่ระบุ")
-        else:
-            df[search_col] = "ไม่ระบุ"
+        # ตรวจสอบคอลัมน์ค้นหา (ถ้าไม่มีให้สร้างไว้กัน Error)
+        if 'Full_Description' not in df.columns: df['Full_Description'] = "-"
+        if 'Cables type' not in df.columns: df['Cables type'] = "-"
+        if 'Customer' not in df.columns: df['Customer'] = "-"
             
         return df
     
@@ -66,13 +72,12 @@ def load_data():
 
 df = load_data()
 
-# --- 3. ส่วนแสดงผล ---
+# --- 3. ส่วนเตรียมสมอง AI ---
 if df is not None:
     search_col = 'Full_Description'
     result_col = 'Decision result'
-    
-    # 🔥 [ฟีเจอร์ใหม่ 1] พจนานุกรมคำศัพท์ (แก้ไขตรงนี้ได้เลย) 🔥
-    # ระบบจะเอาคำพวกนี้ไปแปะเพิ่มในฐานข้อมูลให้เอง ทำให้ค้นหาเจอทั้งตัวย่อและตัวเต็ม
+
+    # 🔥 [ส่วนที่ 1] คำศัพท์เหมือน (Synonyms)
     synonyms = {
         "T/S": "Tensile Strength แรงดึง",
         "B/S": "Breaking Strength แรงดึงขาด",
@@ -80,39 +85,40 @@ if df is not None:
         "OD": "Outer Diameter ขนาดภายนอก",
         "ID": "Inner Diameter ขนาดภายใน",
         "Elong": "Elongation ยืด",
-        # เพิ่มคำอื่นๆ ต่อท้ายได้เลยครับ รูปแบบ "คำค้น": "คำความหมาย"
+        "AV": "Automotive Wire สายรถยนต์", # ตัวอย่างเพิ่มชนิดสาย
     }
 
-    # เตรียมข้อมูลสำหรับ AI (รวมคำศัพท์เข้าไปด้วย)
-    # ฟังก์ชันช่วยแปลงคำศัพท์
     def enrich_text(text):
         text = str(text).lower()
         for key, value in synonyms.items():
-            # ถ้าเจอคำย่อในข้อความ ให้เติมคำเต็มเข้าไปด้วย
-            if key.lower() in text:
-                text += " " + value
-            # หรือถ้าเจอคำเต็ม ก็เติมคำย่อเข้าไป
-            if value.lower() in text:
-                text += " " + key
+            if key.lower() in text: text += " " + value
+            if value.lower() in text: text += " " + key
         return text
 
-    # สร้างคอลัมน์ใหม่สำหรับให้ AI เรียนรู้ (User ไม่เห็น แต่ AI เห็น)
-    df['AI_Search_Text'] = df[search_col].apply(enrich_text)
+    # 🔥 [ส่วนที่ 2] รวมร่างคอลัมน์เพื่อค้นหา (Combined Search) 🔥
+    # เอา ชนิดสาย + ลูกค้า + ปัญหา มารวมกัน เพื่อให้ค้นหาได้ทุกอย่าง
+    df['Combined_Search'] = df['Cables type'].astype(str) + " " + \
+                            df['Customer'].astype(str) + " " + \
+                            df['Full_Description'].astype(str)
+    
+    # ใส่คำศัพท์เพิ่มเข้าไปในข้อมูลรวม
+    df['AI_Input'] = df['Combined_Search'].apply(enrich_text)
 
-    # 🔥 [ฟีเจอร์ใหม่ 2] ปรับให้จับคำสั้นได้ดีขึ้น (แก้จาก 3 เป็น 2)
-    # ngram_range=(2, 5) -> เจอคำ 2 ตัวอักษรอย่าง MG, OD ได้แล้ว
+    # สร้าง AI (Vectorizer)
+    # ngram_range=(2,5) ช่วยให้หาคำสั้นๆ หรือรหัสสายไฟได้แม่นขึ้น
     vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(2, 5))
-    tfidf_matrix = vectorizer.fit_transform(df['AI_Search_Text'])
+    tfidf_matrix = vectorizer.fit_transform(df['AI_Input'])
 
     st.success(f"✅ ฐานข้อมูลพร้อมใช้งาน ({len(df)} รายการ)")
 
+    # --- 4. ส่วนหน้าจอค้นหา ---
     top_n = st.slider("จำนวนเคสที่แสดง", 1, 10, 3)
     
-    # ช่องค้นหา
-    query_input = st.text_input("ระบุปัญหา:", placeholder="เช่น B/S ต่ำ, MG สูง...")
+    # เปลี่ยนคำอธิบายให้ User รู้ว่าค้นได้หลายอย่าง
+    query_input = st.text_input("ค้นหา (ระบุชนิดสาย, ปัญหา, หรือลูกค้า):", 
+                                placeholder="เช่น AVVSS, สายเป็นคลื่น, T/S ต่ำ...")
 
     if query_input:
-        # แปลงคำค้นหาด้วยพจนานุกรมเหมือนกัน
         query_enriched = enrich_text(query_input)
         
         query_vec = vectorizer.transform([query_enriched])
@@ -121,7 +127,7 @@ if df is not None:
 
         st.markdown("---")
         
-        # คำนวณ %
+        # คำนวณ % ความน่าจะเป็น
         results_to_show = []
         for idx in top_indices:
             score = similarity[idx]
@@ -131,21 +137,22 @@ if df is not None:
         total_raw_score = sum([s for _, s in results_to_show])
         
         if not results_to_show:
-            st.info("ไม่พบเคสที่คล้ายกัน")
+            st.info("ไม่พบข้อมูลที่ตรงกัน")
         else:
             for idx, original_score in results_to_show:
                 row = df.iloc[idx]
                 decision = str(row.get(result_col, '-'))
                 
+                # คำนวณ %
                 if total_raw_score > 0:
                     normalized_percent = (original_score / total_raw_score) * 100
                 else:
                     normalized_percent = 0
                 
+                # Logic สี
                 decision_lower = decision.lower()
                 status_icon = "🟡"
                 msg_func = st.warning
-                
                 if any(x in decision_lower for x in ['scrap', 'reject', 'ทิ้ง', 'ไม่ผ่าน', 'เสีย']):
                     status_icon = "🔴"
                     msg_func = st.error
@@ -153,14 +160,18 @@ if df is not None:
                     status_icon = "🟢"
                     msg_func = st.success
                 
-                msg_func(f"{status_icon} {decision} (ความน่าจะเป็น: {normalized_percent:.1f}%)")
+                # แสดงหัวข้อผลลัพธ์
+                msg_func(f"{status_icon} ผล: {decision} ({normalized_percent:.0f}%)")
 
-                with st.expander(f"ดูรายละเอียด: {row.get('No of HoldTag', '-')}"):
-                    st.write(f"**ลูกค้า:** {row.get('Customer', '-')}")
-                    st.write(f"**ชนิดสาย:** {row.get('Cables type', '-')}")
-                    st.write(f"**อาการ:** {row.get(search_col, '-')}")
-                    st.write(f"**วันที่:** {row.get('Date', '-')}")
-                    if 'Recheck' in row:
-                        st.write(f"**Recheck:** {row.get('Recheck', '-')}")
+                # แสดงรายละเอียด (จัดเรียงใหม่ให้อ่านง่าย)
+                with st.expander(f"รายละเอียดใบหยุด: {row.get('No of HoldTag', '-')}"):
+                    st.markdown(f"**📌 ชนิดสาย:** `{row.get('Cables type', '-')}`")
+                    st.markdown(f"**🏢 ลูกค้า:** {row.get('Customer', '-')}")
+                    st.markdown(f"**⚠️ อาการเสีย:** {row.get(search_col, '-')}")
+                    st.markdown(f"**📅 วันที่:** {row.get('Date', '-')}")
+                    
+                    if row.get('Recheck', '-') != '-':
+                        st.info(f"**Recheck:** {row.get('Recheck', '-')}")
+
 else:
     st.error("❌ ไม่พบไฟล์ข้อมูล! กรุณาตรวจสอบว่ามีไฟล์ Excel (.xlsx) วางอยู่คู่กับไฟล์ app.py หรือไม่")
